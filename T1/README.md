@@ -1,25 +1,45 @@
-# Entrega 1
-# Analisador Léxico - Linguagem Algorítmica (LA)
+# T1 — Analisador léxico da linguagem LA
 
-Este projeto é a implementação do **Trabalho 1** da disciplina de **Construção de Compiladores** (DC/UFSCar). O objetivo é realizar a análise léxica de programas escritos na linguagem LA, gerando uma lista de tokens ou reportando erros.
+## Membros do grupo
 
-## Membros do Grupo
-* **Rodrigo Smith Rodrigues** - RA: 821172
-* **Vitória Hilgert Tomasel** - RA: 821259
-* **Pedro dos Santos Sakai** - RA: 824387
+- Rodrigo Smith Rodrigues - RA: 821172
+- Vitória Hilgert Tomasel - RA: 821259
+- Pedro dos Santos Sakai - RA: 824387
 
-## Pré-requisitos
-Para compilar e executar este projeto, você precisará de:
-* **Python 3.8** ou superior instalado no sistema.
-* Não são necessárias bibliotecas externas (utiliza apenas a biblioteca padrão `re` e `sys`).
+## Compilar
 
-## Como Executar
-O analisador funciona via linha de comando e exige dois argumentos: o caminho do arquivo fonte (entrada) e o caminho onde o resultado será salvo (saída)
-
-### Passo a Passo:
-1. Abra o terminal ou prompt de comando.
-2. Navegue até a pasta onde o arquivo `analisador_lexico.py` está localizado.
-3. Execute o comando seguindo o modelo abaixo:
+O Maven só enxerga o projeto onde está o `pom.xml` — neste repositório isso é a pasta **`T1`**, não a raiz `compiladores`.
 
 ```bash
-python analisador_lexico.py "C:\caminho\arquivo_entrada.txt" "C:\caminho\saida.txt"
+mvn -f T1/pom.xml package
+```
+
+O JAR executável com dependências é gerado em:
+
+`target/t1-la-lexico-1.0-SNAPSHOT-jar-with-dependencies.jar`
+
+## Executar (conforme especificação)
+
+```bash
+java -jar target/t1-la-lexico-1.0-SNAPSHOT-jar-with-dependencies.jar /caminho/entrada.txt /caminho/saida.txt
+```
+
+## Corretor automático (local)
+
+```bash
+# Na raiz compiladores
+java -cp corretor/corretor-auto.jar \
+  br.ufscar.dc.compiladores.compiladores.corretor.automatico.Principal \
+  "java -jar $PWD/T1/target/t1-la-lexico-1.0-SNAPSHOT-jar-with-dependencies.jar" \
+  gcc \
+  "$PWD/corretor/temp" \
+  "$PWD/casos-de-teste" \
+  "824387, 821259, 821172" \
+  "t1"
+```
+
+## Estrutura
+
+`src/main/antlr4/.../LALexer.g4`: Gramática léxica (tokens, comentários, erros).
+`src/main/java/.../Principal.java`: Lê a entrada, percorre os tokens e formata a saída ou o primeiro erro. 
+
