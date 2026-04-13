@@ -28,3 +28,30 @@ Arquivos principais:
 ## Como compilar
 
 Na raiz do repositório, execute:
+
+```bash
+cd T2
+mvn package -q
+```
+
+Isso irá:
+1. Gerar `LALexer.java` e `LAParser.java` a partir de `LA.g4` (plugin ANTLR4)
+2. Compilar todos os arquivos Java
+3. Empacotar o JAR executável com dependências em `target/t2-la-sintatico-1.0-SNAPSHOT-jar-with-dependencies.jar`
+
+## Como executar
+
+```bash
+java -jar T2/target/t2-la-sintatico-1.0-SNAPSHOT-jar-with-dependencies.jar <arquivo_entrada> <arquivo_saida>
+```
+
+- `<arquivo_entrada>`: arquivo-fonte em linguagem LA
+- `<arquivo_saida>`: arquivo onde as mensagens de erro (ou `Fim da compilacao`) serão escritas
+
+## Saída esperada
+
+| Situação | Saída |
+|---|---|
+| Programa correto | `Fim da compilacao` |
+| Erro léxico | `Linha N: <mensagem>` + `Fim da compilacao` |
+| Erro sintático | `Linha N: erro sintatico proximo a <token>` + `Fim da compilacao` |
