@@ -16,8 +16,23 @@ import org.antlr.v4.runtime.Token;
 import org.antlr.v4.runtime.tree.ParseTree;
 import org.antlr.v4.runtime.tree.TerminalNode;
 
+/**
+ * Ponto de entrada do compilador T2 — análise sintática da linguagem LA.
+ *
+ * Fluxo de compilação:
+ *   1. Pré-análise léxica: detecta comentário não fechado, cadeia não fechada
+ *      ou símbolo não identificado antes de acionar o parser.
+ *   2. Análise sintática: LALexer + LAParser (gerados pelo ANTLR4 a partir de
+ *      LA.g4) constroem a árvore de derivação via parser.programa().
+ *   3. Erros sintáticos são capturados por ErroSintatico (apenas o primeiro).
+ *   4. Verifica se a palavra-chave "algoritmo" foi omitida na seção principal
+ *      (alternativa PrincipalSemPalavraAlgoritmo) e gera erro adequado.
+ *
+ * Uso: java -jar t2.jar <arquivo_entrada> <arquivo_saida>
+ */
 public final class Principal {
 
+    /** Mensagem de encerramento bem-sucedido da compilação. */
     private static final String FIM = "Fim da compilacao";
 
     private Principal() {}
@@ -28,21 +43,27 @@ public final class Principal {
             System.exit(1);
         }
         Path entrada = Path.of(args[0]);
-        Path saida = Path.of(args[1]);
+        Path saida   = Path.of(args[1]);
 
         try {
             String texto = Files.readString(entrada, StandardCharsets.UTF_8);
+
             try (PrintWriter pw = new PrintWriter(Files.newBufferedWriter(saida, StandardCharsets.UTF_8))) {
+
+                // Etapa 1: pré-análise léxica
                 if (emitirErroLexicoSeHouver(texto, pw)) {
                     pw.println(FIM);
                     return;
                 }
 
+                // Etapa 2: análise sintática
                 CharStream cs = CharStreams.fromString(texto);
                 LALexer lexer = new LALexer(cs);
                 CommonTokenStream tokens = new CommonTokenStream(lexer);
                 LAParser parser = new LAParser(tokens);
 
+                // Substitui o listener padrão do ANTLR (que imprime no stderr)
+                // pelo nosso, que captura o primeiro erro sintático
                 ErroSintatico sint = new ErroSintatico();
                 parser.removeErrorListeners();
                 parser.addErrorListener(sint);
@@ -65,9 +86,12 @@ public final class Principal {
                     return;
                 }
 
+                // Etapa 3: detecta omissão da palavra-chave "algoritmo"
+                // A gramática aceita essa forma via PrincipalSemPalavraAlgoritmo,
+                // mas ela é sintaticamente incorreta e deve gerar erro
                 if (tree instanceof LAParser.ProgramaContext pc) {
                     if (pc.secao_principal() instanceof LAParser.PrincipalSemPalavraAlgoritmoContext sem) {
-                        int linha = primeiraLinhaDeComando(sem.corpo());
+                        int linha   = primeiraLinhaDeComando(sem.corpo());
                         String prox = textoProximoAoFaltaAlgoritmo(sem.corpo());
                         pw.println("Linha " + linha + ": erro sintatico proximo a " + prox);
                         pw.println(FIM);
@@ -83,15 +107,16 @@ public final class Principal {
         }
     }
 
-    /** Pré-análise léxica (mensagens conforme casos T2). */
+    /**
+     * Percorre os tokens do texto-fonte procurando erros léxicos.
+     * Retorna true (e emite a mensagem) se algum for encontrado.
+     */
     private static boolean emitirErroLexicoSeHouver(String texto, PrintWriter pw) {
         CharStream cs = CharStreams.fromString(texto);
         LALexer lexer = new LALexer(cs);
         while (true) {
             Token t = lexer.nextToken();
-            if (t.getType() == Token.EOF) {
-                break;
-            }
+            if (t.getType() == Token.EOF) break;
             if (t.getType() == LALexer.COMENTARIO_NAO_FECHADO) {
                 pw.println("Linha " + t.getLine() + ": comentario nao fechado");
                 return true;
@@ -101,14 +126,14 @@ public final class Principal {
                 return true;
             }
             if (t.getType() == LALexer.SIMBOLO_NAO_IDENTIFICADO) {
-                String c = t.getText();
-                pw.println("Linha " + t.getLine() + ": " + c + " - simbolo nao identificado");
+                pw.println("Linha " + t.getLine() + ": " + t.getText() + " - simbolo nao identificado");
                 return true;
             }
         }
         return false;
     }
 
+    /** Retorna a linha do primeiro comando do corpo (usado na mensagem de erro). */
     private static int primeiraLinhaDeComando(LAParser.CorpoContext corpo) {
         for (int i = 0; i < corpo.getChildCount(); i++) {
             if (corpo.getChild(i) instanceof LAParser.ComandoContext c) {
@@ -118,50 +143,41 @@ public final class Principal {
         return corpo.getStop() != null ? corpo.getStop().getLine() : 1;
     }
 
-    /**
-     * Lexema amigável do primeiro comando quando falta {@code algoritmo}
-     * (caso 1 do LEIA_ME: geralmente {@code leia}, {@code escreva}, etc.).
-     */
+    /** Retorna o texto do primeiro token do primeiro comando do corpo. */
     private static String textoProximoAoFaltaAlgoritmo(LAParser.CorpoContext corpo) {
         for (int i = 0; i < corpo.getChildCount(); i++) {
             if (corpo.getChild(i) instanceof LAParser.ComandoContext c) {
-                return lexemaAmigavelPrimeiroTokenComando(c);
+                TerminalNode tn = primeiroTerminal(c);
+                return tn != null ? humanizarToken(tn.getSymbol()) : "EOF";
             }
         }
         return "EOF";
     }
 
-    private static String lexemaAmigavelPrimeiroTokenComando(LAParser.ComandoContext c) {
-        TerminalNode tn = primeiroTerminal(c);
-        if (tn == null) {
-            return "EOF";
-        }
-        return humanizarToken(tn.getSymbol());
-    }
-
+    /** Busca recursivamente o primeiro nó terminal (folha) na subárvore. */
     private static TerminalNode primeiroTerminal(ParseTree t) {
-        if (t instanceof TerminalNode tn) {
-            return tn;
-        }
+        if (t instanceof TerminalNode tn) return tn;
         for (int i = 0; i < t.getChildCount(); i++) {
             TerminalNode r = primeiroTerminal(t.getChild(i));
-            if (r != null) {
-                return r;
-            }
+            if (r != null) return r;
         }
         return null;
     }
 
+    /** Retorna o texto do token, ou "EOF" para fim de arquivo. */
     private static String humanizarToken(Token t) {
-        if (t == null || t.getType() == Token.EOF) {
-            return "EOF";
-        }
+        if (t == null || t.getType() == Token.EOF) return "EOF";
         return t.getText();
     }
 
+    /**
+     * Listener de erro sintático: substitui o listener padrão do ANTLR para
+     * capturar apenas o primeiro erro (linha e token infrator).
+     */
     private static final class ErroSintatico extends BaseErrorListener {
-        int linha;
-        String proximo;
+
+        int linha;      // linha do primeiro erro (0 = sem erro)
+        String proximo; // texto do token que causou o erro
 
         @Override
         public void syntaxError(
@@ -171,22 +187,13 @@ public final class Principal {
                 int charPositionInLine,
                 String msg,
                 RecognitionException e) {
-            if (this.linha > 0) {
-                return;
-            }
+            if (this.linha > 0) return; // ignora erros subsequentes
             this.linha = line;
             if (offendingSymbol instanceof Token t) {
-                this.proximo = humanizarSintatico(t, (Parser) recognizer);
+                this.proximo = t.getType() == Token.EOF ? "EOF" : t.getText();
             } else {
                 this.proximo = "EOF";
             }
-        }
-
-        private static String humanizarSintatico(Token t, Parser parser) {
-            if (t.getType() == Token.EOF) {
-                return "EOF";
-            }
-            return t.getText();
         }
     }
 }
