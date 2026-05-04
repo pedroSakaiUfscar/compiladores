@@ -16,13 +16,33 @@ import org.antlr.v4.runtime.Token;
 import org.antlr.v4.runtime.tree.ParseTree;
 import org.antlr.v4.runtime.tree.TerminalNode;
 
+/**
+ * Analisador semântico da linguagem LA.
+ *
+ * Recebe a árvore de derivação produzida pelo parser do T2 e percorre suas
+ * declarações e comandos coletando uma lista de erros semânticos:
+ *   - Identificadores não declarados ou redeclarados
+ *   - Tipos não declarados / atribuição com tipos incompatíveis
+ *   - Acesso a campos inexistentes em registros
+ *
+ * Os erros não interrompem a análise: a lista pode ser obtida por
+ * {@link #getErros()} ao final, já ordenada por linha.
+ *
+ * Modelo interno de tipos (string canônica):
+ *   - Tipos básicos: "literal", "inteiro", "real", "logico"
+ *   - Registros:    "@reg:<id>" (id = nome do tipo ou anônimo "__anon_N")
+ *   - Ponteiros:    prefixo "^" repetido (ex.: "^^inteiro")
+ */
 public final class AnalisadorSemantico {
 
+    /** Erro semântico: linha e mensagem como devem aparecer na saída. */
     public record Erro(int linha, String mensagem) {}
 
+    /** Tipos primitivos da linguagem LA (lowercase). */
     private static final List<String> TIPOS_BASICOS =
             List.of("literal", "inteiro", "real", "logico");
 
+    /** Lista acumulada de erros encontrados durante a análise. */
     private final List<Erro> erros = new ArrayList<>();
     /** Nome declarado pelo programador para alias / registro -> tipo interno canonical. */
     private final Map<String, String> nomesTipoUsuario = new HashMap<>();
@@ -30,10 +50,14 @@ public final class AnalisadorSemantico {
     /** id de registro (nome do tipo ou __anon__) -> campo -> tipo. */
     private final Map<String, Map<String, String>> camposDoRegistro = new HashMap<>();
 
+    /** Nomes de procedimentos declarados globalmente. */
     private final Set<String> procedimentos = new HashSet<>();
+    /** Funções declaradas: nome -> tipo de retorno. */
     private final Map<String, String> retornoFuncoes = new HashMap<>();
+    /** Contador para gerar identificadores únicos para registros anônimos. */
     private int idRegistroAnonimo = 0;
 
+    /** Pilha de escopos (cada nível é um mapa nome -> tipo). O topo é o escopo atual. */
     private Deque<Map<String, String>> escopos = new ArrayDeque<>();
     /**
      * Nomes declarados cuja lista de variáveis/parâmetros teve erro de tipo: não devem gerar
@@ -41,14 +65,23 @@ public final class AnalisadorSemantico {
      */
     private final Set<String> nomesDeclaracaoComTipoInvalido = new HashSet<>();
 
+    /** Devolve a lista (imutável) de erros coletados pela última chamada de {@link #analisar}. */
     public List<Erro> getErros() {
         return Collections.unmodifiableList(erros);
     }
 
+    /** Registra um erro semântico na lista. */
     private void erro(int linha, String msg) {
         erros.add(new Erro(linha, msg));
     }
 
+    /**
+     * Ponto de entrada da análise semântica.
+     *
+     * Reinicializa todo o estado interno, processa primeiro as declarações
+     * globais (tipos, constantes, procedimentos, funções) e depois o corpo
+     * da seção principal num escopo próprio. Ao final, ordena os erros por linha.
+     */
     public void analisar(LAParser.ProgramaContext ctx) {
         escopos.clear();
         escopos.push(new HashMap<>());
@@ -76,12 +109,14 @@ public final class AnalisadorSemantico {
         ordenarErros();
     }
 
+    /** Ordena os erros pela linha em que ocorreram, preservando ordem de inserção quando empatam. */
     private void ordenarErros() {
         erros.sort((a, b) -> Integer.compare(a.linha, b.linha));
     }
 
     // --- programa global -------------------------------------------------
 
+    /** Despacha cada tipo de declaração global para o tratamento correspondente. */
     private void processarDeclaracaoGlobal(LAParser.Declaracao_globalContext dg) {
         if (dg.declaracao_tipo() != null) {
             registrarDeclaracaoTipo(dg.declaracao_tipo());
@@ -94,6 +129,10 @@ public final class AnalisadorSemantico {
         }
     }
 
+    /**
+     * Registra uma declaração global do tipo "tipo X: registro ... fim_registro".
+     * Detecta redeclaração e armazena os campos do registro para uso posterior.
+     */
     private void registrarDeclaracaoTipo(LAParser.Declaracao_tipoContext d) {
         String nomeTipo = textoIdent(d.ident());
         Token tok = d.ident().IDENT().getSymbol();
@@ -106,6 +145,7 @@ public final class AnalisadorSemantico {
         registrarCamposEmRegistro(idReg, d.lista_campos_registro());
     }
 
+    /** Registra uma constante global no escopo atual com seu tipo declarado. */
     private void registrarConstanteGlobal(LAParser.Declaracao_constante_globalContext c) {
         String nome = textoIdent(c.ident());
         Token idTok = c.ident().IDENT().getSymbol();
@@ -119,6 +159,11 @@ public final class AnalisadorSemantico {
         }
     }
 
+    /**
+     * Declara um procedimento ou função: registra a assinatura, abre um novo escopo,
+     * declara os parâmetros e analisa o corpo. Detecta redeclaração e parâmetros
+     * com tipo inválido.
+     */
     private void declararSubrotina(ParserRuleContext decl, boolean procedimento) {
         final Token nomeTok;
         final LAParser.Lista_parametrosContext params;
@@ -175,6 +220,11 @@ public final class AnalisadorSemantico {
 
     // --- corpo (declarações + comandos) ----------------------------------
 
+    /**
+     * Percorre um corpo (declarações locais + comandos) em duas passadas:
+     * primeiro registra as declarações no escopo atual e depois analisa os comandos.
+     * Isso permite usar variáveis declaradas mais abaixo no mesmo bloco.
+     */
     private void processarConteudoCorpo(LAParser.CorpoContext corpo) {
         for (int i = 0; i < corpo.getChildCount(); i++) {
             if (corpo.getChild(i) instanceof LAParser.Declaracao_localContext dl) {
@@ -188,6 +238,10 @@ public final class AnalisadorSemantico {
         }
     }
 
+    /**
+     * Trata uma declaração local: declare (variáveis), constante (constantes locais)
+     * ou tipo (alias / registro local).
+     */
     private void processarDeclaracaoLocal(LAParser.Declaracao_localContext dl) {
         if (dl.DECLARE() != null) {
             for (LAParser.Variavel_declContext vd : dl.variavel_decl()) {
@@ -225,6 +279,10 @@ public final class AnalisadorSemantico {
         }
     }
 
+    /**
+     * Expande o corpo de um "tipo X: ..." (registro inline ou alias para outro tipo)
+     * e devolve a representação canônica do tipo.
+     */
     private String expandirTipoCorpoTipo(LAParser.Tipo_corpo_tipoContext ctx) {
         if (ctx.REGISTRO() != null) {
             String idReg = proximoRegistroAnonimo();
@@ -235,6 +293,7 @@ public final class AnalisadorSemantico {
         return expandirTipoEstendidoSimples(ctx.tipo_estendido_simples());
     }
 
+    /** Despacha cada variante de comando para o método específico. */
     private void processarComando(LAParser.ComandoContext ctx) {
         if (ctx.comando_atribuicao() != null) {
             comandoAtribuicao(ctx.comando_atribuicao());
@@ -259,6 +318,10 @@ public final class AnalisadorSemantico {
         }
     }
 
+    /**
+     * Verifica compatibilidade de tipos em "lvalue <- expressao" e emite
+     * "atribuicao nao compativel para X" quando não há compatibilidade.
+     */
     private void comandoAtribuicao(LAParser.Comando_atribuicaoContext ctx) {
         String tAlvo = tipoParaAtribuicaoLvalor(ctx.lvalue());
         String tExpr = tipoExpressao(ctx.expressao());
@@ -268,12 +331,14 @@ public final class AnalisadorSemantico {
         }
     }
 
+    /** "leia": apenas valida que cada lvalue está declarado (efeito colateral em tipoParaAtribuicaoLvalor). */
     private void comandoLeia(LAParser.Comando_leiaContext ctx) {
         for (LAParser.LvalueContext lv : ctx.lista_lvalue().lvalue()) {
             tipoParaAtribuicaoLvalor(lv);
         }
     }
 
+    /** "escreva": tipa cada expressão (efeito colateral: marca usos). */
     private void comandoEscreva(LAParser.Comando_escrevaContext ctx) {
         for (LAParser.ExpressaoContext ex :
                 ctx.lista_expressoes().expressao()) {
@@ -281,6 +346,10 @@ public final class AnalisadorSemantico {
         }
     }
 
+    /**
+     * Chamada de procedimento: valida que o nome existe como procedimento.
+     * Se for variável ou função, ignora silenciosamente (não é a forma esperada).
+     */
     private void comandoChamadaProc(LAParser.Comando_chamadaContext ctx) {
         String nome = textoIdent(ctx.ident());
         Token t = ctx.ident().IDENT().getSymbol();
@@ -297,6 +366,7 @@ public final class AnalisadorSemantico {
         }
     }
 
+    /** "se ... entao ... [senao ...]": tipa a condição e processa cada bloco em escopo próprio. */
     private void comandoSe(LAParser.Comando_seContext ctx) {
         tipoExpressao(ctx.expressao());
         LAParser.CorpoContext entao = ctx.corpo(0);
@@ -310,6 +380,7 @@ public final class AnalisadorSemantico {
         }
     }
 
+    /** "caso ... seja ... [senao ...]": tipa a expressão e cada item em escopo próprio. */
     private void comandoCaso(LAParser.Comando_casoContext ctx) {
         tipoExpressao(ctx.expressao());
         for (LAParser.Item_casoContext it : ctx.item_caso()) {
@@ -324,6 +395,7 @@ public final class AnalisadorSemantico {
         }
     }
 
+    /** "para ... ate ... faca": tipa as expressões dos limites e processa o corpo em escopo próprio. */
     private void comandoPara(LAParser.Comando_paraContext ctx) {
         tipoExpressao(ctx.expressao(0));
         tipoExpressao(ctx.expressao(1));
@@ -332,6 +404,7 @@ public final class AnalisadorSemantico {
         escopos.pop();
     }
 
+    /** "enquanto ... faca": tipa a condição e processa o corpo em escopo próprio. */
     private void comandoEnquanto(LAParser.Comando_enquantoContext ctx) {
         tipoExpressao(ctx.expressao());
         escopos.push(new HashMap<>());
@@ -339,6 +412,7 @@ public final class AnalisadorSemantico {
         escopos.pop();
     }
 
+    /** "faca ... ate": processa o corpo em escopo próprio e depois tipa a condição. */
     private void comandoFacaAte(LAParser.Comando_faca_ateContext ctx) {
         escopos.push(new HashMap<>());
         processarConteudoCorpo(ctx.corpo());
@@ -348,14 +422,21 @@ public final class AnalisadorSemantico {
 
     // --- Tipos ------------------------------------------------------------
 
+    /** Constrói a chave canônica de um tipo registro a partir de seu id interno. */
     private static String chaveRegistro(String idInterno) {
         return "@reg:" + idInterno;
     }
 
+    /** Gera um id único para um registro anônimo (registro inline em declaração de variável). */
     private String proximoRegistroAnonimo() {
         return "__anon_" + (++idRegistroAnonimo);
     }
 
+    /**
+     * Indexa os campos de um registro num mapa nome -> tipo. Detecta campos
+     * duplicados e expande o tipo de cada campo (que pode ser básico, registro
+     * ou ponteiro).
+     */
     private void registrarCamposEmRegistro(
             String idRegistro, LAParser.Lista_campos_registroContext lista) {
         Map<String, String> cmap =
@@ -382,12 +463,14 @@ public final class AnalisadorSemantico {
         }
     }
 
+    /** Valida (tipa) cada expressão usada como dimensão de array em uma declaração. */
     private void validarExpressoesDimensoes(LAParser.Ident_dimContext idc) {
         for (LAParser.ExpressaoContext ex : idc.expressao()) {
             tipoExpressao(ex);
         }
     }
 
+    /** Devolve o nome canônico (lowercase) de um tipo básico textualmente declarado. */
     private String nomeTipoBasico(LAParser.Tipo_basicoContext ctx) {
         return ctx.start.getText().toLowerCase();
     }
@@ -403,6 +486,10 @@ public final class AnalisadorSemantico {
         return expandirTipoEstendidoSimples(ctx.tipo_estendido_simples());
     }
 
+    /**
+     * Expande tipo_estendido_simples: tipo básico ou nome de tipo declarado,
+     * possivelmente prefixado por '^' (ponteiro). Em falha emite erro e retorna null.
+     */
     private String expandirTipoEstendidoSimples(LAParser.Tipo_estendido_simplesContext ctx) {
         boolean ptr = ctx.CIRCUNFLEXO() != null;
         final String canon;
@@ -437,6 +524,10 @@ public final class AnalisadorSemantico {
 
     // --- Escopo / símbolos -------------------------------------------------
 
+    /**
+     * Declara um símbolo no escopo do topo da pilha. Retorna false e emite
+     * erro de redeclaração se o nome já existir no mesmo escopo.
+     */
     private boolean declararSimboloNoEscopoAtual(Token idTok, String tipo) {
         String nome = idTok.getText();
         Map<String, String> topo = escopos.peek();
@@ -448,6 +539,11 @@ public final class AnalisadorSemantico {
         return true;
     }
 
+    /**
+     * Procura um símbolo subindo a pilha de escopos. Emite "nao declarado" se não encontrar
+     * (a menos que o nome esteja na lista de declarações com tipo inválido — caso em que
+     * o erro de tipo já foi emitido na declaração e não duplicamos a mensagem aqui).
+     */
     private String buscarTipoVariavel(String nome, Token uso) {
         for (Map<String, String> m : escopos) {
             if (m.containsKey(nome)) {
@@ -461,6 +557,7 @@ public final class AnalisadorSemantico {
         return null;
     }
 
+    /** Versão de busca que NÃO emite erro caso o nome não exista — usada para descobrir o papel do identificador. */
     private String buscarTipoVariavelSilenciosa(String nome) {
         for (Map<String, String> m : escopos) {
             if (m.containsKey(nome)) {
@@ -470,7 +567,13 @@ public final class AnalisadorSemantico {
         return null;
     }
 
-    /** Tipo do lado esquerdo de uma atribuição / leia. */
+    /**
+     * Tipo do lado esquerdo de uma atribuição / leia.
+     *
+     * Suporta sufixos encadeados: acesso a campo (.nome), indexação ([expr])
+     * e desreferenciamento (^). Pode emitir erros como "nao declarado" para
+     * o identificador base ou para campos inexistentes.
+     */
     private String tipoParaAtribuicaoLvalor(LAParser.LvalueContext lv) {
         int idx = 0;
         if (lv.getChild(idx) instanceof TerminalNode tn
@@ -510,6 +613,7 @@ public final class AnalisadorSemantico {
         return tipo;
     }
 
+    /** Remove um único '^' do prefixo do tipo (ex.: "^^inteiro" -> "^inteiro"). */
     private static String tirarUmPont(String tipoVar) {
         if (tipoVar != null && tipoVar.startsWith("^")) {
             return tipoVar.substring(1);
@@ -525,6 +629,11 @@ public final class AnalisadorSemantico {
         return tipoVariavelBase;
     }
 
+    /**
+     * Acessa um campo de registro a partir do tipo da expressão base.
+     * Emite "identificador X nao declarado" se o tipo não for um registro
+     * ou se o campo não existir.
+     */
     private String campoDeRegistro(String tipoValor, String nomeCampo, Token ref) {
         String idReg = extrairIdRegistro(tipoValor);
         if (idReg == null) {
@@ -549,6 +658,10 @@ public final class AnalisadorSemantico {
 
     // --- Expressões --------------------------------------------------------
 
+    /**
+     * Tipa uma expressão completa (operador "ou" lógico no nível mais alto).
+     * Devolve o tipo canônico resultante ou null caso haja incompatibilidade.
+     */
     private String tipoExpressao(LAParser.ExpressaoContext ctx) {
         if (ctx.expressao() != null) {
             String t1 = tipoExpressao(ctx.expressao());
@@ -572,6 +685,7 @@ public final class AnalisadorSemantico {
         return a == null || b == null;
     }
 
+    /** Tipa uma expressão com operador "e" lógico. */
     private String tipoExprE(LAParser.Expr_eContext ctx) {
         if (ctx.expr_e() != null) {
             String t1 = tipoExprE(ctx.expr_e());
@@ -591,6 +705,10 @@ public final class AnalisadorSemantico {
         return null;
     }
 
+    /**
+     * Tipa uma expressão relacional. Operadores relacionais sempre produzem "logico"
+     * quando os operandos são comparáveis; caso contrário, devolvem null.
+     */
     private String tipoExprRel(LAParser.Expr_relContext ctx) {
         if (ctx.op == null) {
             return tipoExprArit(ctx.expr_arit());
@@ -607,6 +725,11 @@ public final class AnalisadorSemantico {
         return "logico";
     }
 
+    /**
+     * Decide se dois tipos são comparáveis pelo operador relacional dado.
+     * Numéricos (inteiro/real) são sempre comparáveis entre si;
+     * "literal" só compara com "literal"; "logico" só admite = e <>.
+     */
     private boolean comparavelRelacional(String a, String b, int opTipo) {
         if (TIPOS_BASICOS.contains(a)) {
             a = tirarPonteirosRecursivo(a);
@@ -628,6 +751,7 @@ public final class AnalisadorSemantico {
         return false;
     }
 
+    /** Remove todos os '^' do prefixo do tipo (útil para comparações de "tipo subjacente"). */
     private static String tirarPonteirosRecursivo(String tipo) {
         String t = tipo;
         while (t != null && t.startsWith("^")) {
@@ -636,6 +760,7 @@ public final class AnalisadorSemantico {
         return t;
     }
 
+    /** Tipa uma expressão aritmética com operadores de menor precedência (+, -). */
     private String tipoExprArit(LAParser.Expr_aritContext ctx) {
         if (ctx.getChildCount() == 1) {
             return tipoTermo(ctx.termo());
@@ -655,6 +780,7 @@ public final class AnalisadorSemantico {
         return menosTipos(a, b);
     }
 
+    /** Soma: numérico + numérico (resultado real se algum for real); literal + literal = literal. */
     private String somaTipos(String a, String b) {
         if ("literal".equals(a) && "literal".equals(b)) {
             return "literal";
@@ -670,6 +796,7 @@ public final class AnalisadorSemantico {
         return null;
     }
 
+    /** Subtração: aceita apenas operandos numéricos. */
     private String menosTipos(String a, String b) {
         boolean na = ehNumericoOuPonteirosNumericos(a);
         boolean nb = ehNumericoOuPonteirosNumericos(b);
@@ -682,11 +809,13 @@ public final class AnalisadorSemantico {
         return null;
     }
 
+    /** True se o tipo for numérico (inteiro/real) eventualmente sob qualquer número de '^'. */
     private boolean ehNumericoOuPonteirosNumericos(String t) {
         String u = tirarPonteirosRecursivo(t);
         return "inteiro".equals(u) || "real".equals(u);
     }
 
+    /** Tipa um termo (operadores *, /, %). */
     private String tipoTermo(LAParser.TermoContext ctx) {
         if (ctx.getChildCount() == 1) {
             return tipoUnario(ctx.unario());
@@ -699,6 +828,10 @@ public final class AnalisadorSemantico {
         return combinarMulDivMod(ctx, tl, tr);
     }
 
+    /**
+     * Multiplicação/divisão/módulo. MOD exige inteiros; demais aceitam numéricos
+     * com promoção a real quando algum operando for real.
+     */
     private String combinarMulDivMod(LAParser.TermoContext ctx, String a, String b) {
         int op = ctx.op.getType();
         boolean na = ehNumericoOuPonteirosNumericos(a);
@@ -721,6 +854,10 @@ public final class AnalisadorSemantico {
         return "inteiro";
     }
 
+    /**
+     * Tipa um operador unário. "-" exige numérico (preserva o tipo);
+     * "nao" exige logico (resulta em logico).
+     */
     private String tipoUnario(LAParser.UnarioContext ctx) {
         if (ctx.MENOS() != null) {
             String ti = tipoUnario(ctx.unario());
@@ -736,6 +873,13 @@ public final class AnalisadorSemantico {
         return tipoFator(ctx.fator());
     }
 
+    /**
+     * Tipa um fator, que pode ser:
+     *   - Literal (número, cadeia, verdadeiro/falso) ou expressão entre parênteses
+     *   - Operador de endereço (&id) ou desreferência (^id)
+     *   - Chamada de função (id(...))
+     *   - Acesso a variável, possivelmente com sufixos .campo / [expr] encadeados
+     */
     private String tipoFator(LAParser.FatorContext ctx) {
         ParseTree p0 = ctx.getChild(0);
         if (p0 instanceof TerminalNode tn0) {
@@ -755,6 +899,7 @@ public final class AnalisadorSemantico {
             if (sym == LAParser.VERDADEIRO || sym == LAParser.FALSO) {
                 return "logico";
             }
+            // &id : operador de endereço (devolve ponteiro para o tipo da variável)
             if (sym == LAParser.E_COMERCIAL) {
                 String nome = textoIdent(ctx.ident(0));
                 Token t = ctx.ident(0).IDENT().getSymbol();
@@ -764,6 +909,7 @@ public final class AnalisadorSemantico {
                 }
                 return "^" + vt;
             }
+            // ^id : operador de desreferência (exige tipo ponteiro)
             if (sym == LAParser.CIRCUNFLEXO) {
                 String nome = textoIdent(ctx.ident(0));
                 Token t = ctx.ident(0).IDENT().getSymbol();
@@ -779,6 +925,7 @@ public final class AnalisadorSemantico {
         }
 
         if (p0 instanceof LAParser.IdentContext primeiro) {
+            // Chamada de função: id(arg, arg, ...)
             if (ctx.ABRE_PAR() != null && ctx.ident().size() == 1) {
                 Token t = primeiro.IDENT().getSymbol();
                 String nomeFun = textoIdent(primeiro);
@@ -805,6 +952,11 @@ public final class AnalisadorSemantico {
         return null;
     }
 
+    /**
+     * Aplica os sufixos .campo e [expr] encadeados sobre o tipo de uma variável
+     * (na ordem em que aparecem no texto). Cada acesso pode reduzir um nível
+     * de ponteiro/array ou trocar para o tipo de um campo de registro.
+     */
     private String aplicarSufixoTipoVariavel(LAParser.FatorContext ctx, Token refBase, String tipoIni) {
         String tipoCorrente = tipoIni;
         int ids = 1;
@@ -834,6 +986,7 @@ public final class AnalisadorSemantico {
         return tipoCorrente;
     }
 
+    /** Devolve o tipo do literal usado em uma declaração de constante. */
     private static String tipoValorConstante(LAParser.Valor_constanteContext ctx) {
         if (ctx.CADEIA() != null) {
             return "literal";
@@ -850,10 +1003,15 @@ public final class AnalisadorSemantico {
         return null;
     }
 
+    /** Igualdade estrita entre tipos canônicos. */
     private static boolean tiposIguais(String a, String b) {
         return Objects.equals(a, b);
     }
 
+    /**
+     * Compatibilidade para atribuição "alvo <- expr": tipos iguais ou promoção
+     * implícita de inteiro para real (real := inteiro é aceito; o inverso não).
+     */
     private static boolean compativelAtribuicao(String alvo, String expr) {
         if (alvo == null || expr == null) {
             return false;
@@ -864,6 +1022,7 @@ public final class AnalisadorSemantico {
         return "real".equals(alvo) && "inteiro".equals(expr);
     }
 
+    /** Atalho para extrair o lexema de um nó IdentContext da árvore. */
     private static String textoIdent(LAParser.IdentContext id) {
         return id.IDENT().getText();
     }
