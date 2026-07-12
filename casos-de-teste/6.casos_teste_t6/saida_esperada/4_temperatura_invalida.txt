@@ -1,0 +1,1 @@
+Erro 10:22 - temperatura de forno deve estar entre 50 e 300 graus Celsius

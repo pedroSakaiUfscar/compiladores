@@ -1,0 +1,13 @@
+receita
+Nome: "Repetido"
+Tempo: 5 min
+
+Ingredientes:
+1 xicara de Farinha
+2 xicara de Farinha
+fim_ingredientes
+
+Metodo:
+passo("Nao vai dar certo.")
+fim_metodo
+fim_receita

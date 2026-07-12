@@ -1,0 +1,18 @@
+receita
+Nome: "Brigadeiro"
+Tempo: 20 min
+Porcoes: 30
+
+Ingredientes:
+1 xicara de LeiteCondensado
+1 colher sopa de Margarina
+1 colher sopa de Chocolate
+sal a_gosto
+fim_ingredientes
+
+Metodo:
+misture(LeiteCondensado, Margarina, Chocolate)
+cozinhe(LeiteCondensado, 20 min)
+passo("Enrole em bolinhas e passe no chocolate granulado.")
+fim_metodo
+fim_receita

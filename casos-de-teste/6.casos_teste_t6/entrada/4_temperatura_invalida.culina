@@ -1,0 +1,12 @@
+receita
+Nome: "Forno explodindo"
+Tempo: 20 min
+
+Ingredientes:
+100 g de Farinha
+fim_ingredientes
+
+Metodo:
+asse(Farinha, 20 min, 500)
+fim_metodo
+fim_receita

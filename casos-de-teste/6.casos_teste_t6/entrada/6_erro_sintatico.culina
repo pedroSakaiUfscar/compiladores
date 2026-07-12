@@ -1,0 +1,12 @@
+receita
+Nome: "Sem tempo de preparo"
+Porcoes: 4
+
+Ingredientes:
+1 xicara de Farinha
+fim_ingredientes
+
+Metodo:
+passo("Faltou a secao Tempo obrigatoria.")
+fim_metodo
+fim_receita

@@ -1,0 +1,19 @@
+receita
+Nome: "Bolo de Chocolate"
+Tempo: 1 hora
+Porcoes: 8
+
+Paragrafo: "Um bolo simples de chocolate com cobertura cremosa."
+
+Ingredientes:
+4 xicara de Farinha
+2 xicara de Acucar
+100 g de Chocolate
+fim_ingredientes
+
+Metodo:
+Pao_de_Lo()
+cobertura()
+descanse(30 min)
+fim_metodo
+fim_receita

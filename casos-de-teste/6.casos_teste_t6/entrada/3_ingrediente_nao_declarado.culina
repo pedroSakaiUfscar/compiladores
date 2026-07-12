@@ -1,0 +1,12 @@
+receita
+Nome: "Erro semantico"
+Tempo: 10 min
+
+Ingredientes:
+1 xicara de Farinha
+fim_ingredientes
+
+Metodo:
+cozinhe(Acucar, 5 min)
+fim_metodo
+fim_receita
